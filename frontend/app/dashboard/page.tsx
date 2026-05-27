@@ -7,6 +7,7 @@ import {
   PortfolioSummary,
   AssetDiversification,
   TopPerformers,
+  AssetClassCards,
 } from "@/components/dashboard";
 import { fetchPortfolioOverview, type PortfolioOverviewResponse } from "@/lib/api";
 
@@ -76,6 +77,8 @@ export default function DashboardPage() {
       {overview && (
         <>
           <PortfolioSummary data={overview.summary} />
+
+          <AssetClassCards assets={overview.assets} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <AssetDiversification assets={overview.assets} />

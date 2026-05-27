@@ -1127,8 +1127,8 @@ def get_signal(request, symbol):
 
 @api_view(["GET"])
 def portfolio_overview(request):
-    username = request.query_params.get("username", DEFAULT_USERNAME)
-    portfolio_name = request.query_params.get("portfolio", DEFAULT_PORTFOLIO_NAME)
+    username = get_requested_username(request)
+    portfolio_name = DEFAULT_PORTFOLIO_NAME
     portfolio = find_portfolio(username, portfolio_name)
     if portfolio is None:
         return Response(build_empty_overview_payload(username, portfolio_name))
@@ -1137,8 +1137,8 @@ def portfolio_overview(request):
 
 @api_view(["GET"])
 def portfolio_analytics(request):
-    username = request.query_params.get("username", DEFAULT_USERNAME)
-    portfolio_name = request.query_params.get("portfolio", DEFAULT_PORTFOLIO_NAME)
+    username = get_requested_username(request)
+    portfolio_name = DEFAULT_PORTFOLIO_NAME
     period = request.query_params.get("period", "1m")
     portfolio = find_portfolio(username, portfolio_name)
     if portfolio is None:
@@ -1148,8 +1148,8 @@ def portfolio_analytics(request):
 
 @api_view(["GET"])
 def portfolio_insights(request):
-    username = request.query_params.get("username", DEFAULT_USERNAME)
-    portfolio_name = request.query_params.get("portfolio", DEFAULT_PORTFOLIO_NAME)
+    username = get_requested_username(request)
+    portfolio_name = DEFAULT_PORTFOLIO_NAME
     portfolio = find_portfolio(username, portfolio_name)
     if portfolio is None:
         return Response(build_empty_insights_payload())
@@ -1158,8 +1158,8 @@ def portfolio_insights(request):
 
 @api_view(["GET"])
 def portfolio_transactions(request):
-    username = request.query_params.get("username", DEFAULT_USERNAME)
-    portfolio_name = request.query_params.get("portfolio", DEFAULT_PORTFOLIO_NAME)
+    username = get_requested_username(request)
+    portfolio_name = DEFAULT_PORTFOLIO_NAME
     portfolio = find_portfolio(username, portfolio_name)
     if portfolio is None:
         return Response(build_empty_transactions_payload())
@@ -1170,8 +1170,8 @@ def portfolio_transactions(request):
 @api_view(["DELETE"])
 def portfolio_asset_detail(request, holding_id: int):
     """Delete a single holding by its ID."""
-    username = request.query_params.get("username", DEFAULT_USERNAME)
-    portfolio_name = request.query_params.get("portfolio", DEFAULT_PORTFOLIO_NAME)
+    username = get_requested_username(request)
+    portfolio_name = DEFAULT_PORTFOLIO_NAME
     portfolio = find_portfolio(username, portfolio_name)
     if portfolio is None:
         return Response({"error": "Portfolio not found."}, status=404)
@@ -1186,8 +1186,8 @@ def portfolio_asset_detail(request, holding_id: int):
 
 @api_view(["POST"])
 def portfolio_assets(request):
-    username = request.data.get("username", DEFAULT_USERNAME)
-    portfolio_name = request.data.get("portfolio", DEFAULT_PORTFOLIO_NAME)
+    username = get_requested_username(request)
+    portfolio_name = DEFAULT_PORTFOLIO_NAME
     symbol = str(request.data.get("symbol", "")).strip().upper()
     name = str(request.data.get("name", symbol)).strip() or symbol
     asset_class = str(request.data.get("assetClass", "crypto")).strip().lower()

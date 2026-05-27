@@ -3,8 +3,8 @@ export function getAuthHeader(request: Request): Record<string, string> {
   const cookieHeader = request.headers.get("cookie") ?? "";
   const match = cookieHeader.match(/(?:^|;\s*)auth_token=([^;]+)/);
   const token = match ? match[1] : null;
-  if (!token) return {};
-  return { Authorization: `Bearer ${token}` };
+  if (!token || token === "undefined" || token === "null" || !token.trim()) return {};
+  return { Authorization: `Token ${token}` };
 }
 
 /** Build the Set-Cookie string that stores the auth token (HttpOnly). */

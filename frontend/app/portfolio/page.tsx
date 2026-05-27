@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button, Tabs } from "@/components/ui";
 import { AssetTable } from "@/components/portfolio";
@@ -21,8 +22,15 @@ const assetClassTabs = [
   { id: "commodities", label: "Commodities" },
 ];
 
-export default function PortfolioPage() {
-  const [activeAssetClass, setActiveAssetClass] = useState<AssetClass>("crypto");
+const VALID_TABS = new Set<AssetClass>(["crypto", "forex", "commodities"]);
+
+function PortfolioContent() {
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab") as AssetClass | null;
+  const initialTab: AssetClass =
+    tabParam && VALID_TABS.has(tabParam) ? tabParam : "crypto";
+
+  const [activeAssetClass, setActiveAssetClass] = useState<AssetClass>(initialTab);
   const [overview, setOverview] = useState<PortfolioOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
@@ -277,7 +285,7 @@ export default function PortfolioPage() {
 
       <Tabs
         tabs={assetClassTabs}
-        defaultTab="crypto"
+        defaultTab={activeAssetClass}
         onChange={(id) => setActiveAssetClass(id as AssetClass)}
       />
 
@@ -469,5 +477,13 @@ export default function PortfolioPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function PortfolioPage() {
+  return (
+    <Suspense>
+      <PortfolioContent />
+    </Suspense>
   );
 }

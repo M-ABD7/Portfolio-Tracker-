@@ -88,6 +88,10 @@ async function apiRequest<T>(input: RequestInfo, init?: RequestInit): Promise<T>
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`;
+      return payload as T;
+    }
     const message =
       typeof payload?.error === "string"
         ? payload.error

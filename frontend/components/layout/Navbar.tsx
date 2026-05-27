@@ -37,9 +37,14 @@ export function AppNavbar() {
 
   useEffect(() => {
     getCurrentUser()
-      .then(setUser)
+      .then((u) => {
+        setUser(u);
+        if (u?.isStaff && !pathname.startsWith("/admin-panel")) {
+          router.replace("/admin-panel");
+        }
+      })
       .catch(() => setUser(null));
-  }, [pathname]);
+  }, [pathname, router]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {

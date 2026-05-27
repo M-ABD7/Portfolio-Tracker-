@@ -13,11 +13,14 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
   const isPublic = PUBLIC_PATHS.includes(pathname);
   const isAuthPage = FULL_BLEED_AUTH.includes(pathname);
   const isLanding = pathname === "/";
+  const isAdminPanel = pathname.startsWith("/admin-panel");
 
   return (
     <ThemeProvider>
-      {isPublic ? <PublicNavbar /> : <AppNavbar />}
-      {isAuthPage ? (
+      {!isAdminPanel && (isPublic ? <PublicNavbar /> : <AppNavbar />)}
+      {isAdminPanel ? (
+        children
+      ) : isAuthPage ? (
         children
       ) : isLanding ? (
         children

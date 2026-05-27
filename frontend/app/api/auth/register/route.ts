@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     }
 
     const res = NextResponse.json({ user: payload.user }, { status: 201 });
-    res.headers.set("Set-Cookie", buildAuthCookie(payload.access));
+    res.headers.set("Set-Cookie", buildAuthCookie(payload.token));
     return res;
   } catch {
     return NextResponse.json(

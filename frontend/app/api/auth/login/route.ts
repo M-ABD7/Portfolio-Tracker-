@@ -25,7 +25,7 @@ export async function POST(request: Request) {
 
     // Store raw token in HttpOnly cookie — never send it to the browser in JSON
     const res = NextResponse.json({ user: payload.user }, { status: 200 });
-    res.headers.set("Set-Cookie", buildAuthCookie(payload.access));
+    res.headers.set("Set-Cookie", buildAuthCookie(payload.token));
     return res;
   } catch {
     return NextResponse.json(

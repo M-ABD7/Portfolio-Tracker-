@@ -31,7 +31,7 @@ function LoginForm() {
         return;
       }
 
-      router.push(redirect);
+      router.push(data.user?.isStaff ? "/admin-panel" : redirect);
       router.refresh();
     } catch {
       setError("Unable to connect. Please try again.");
