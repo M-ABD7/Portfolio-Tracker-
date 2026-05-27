@@ -1,0 +1,2 @@
+web: gunicorn core.wsgi:application --config gunicorn.conf.py
+release: python manage.py migrate --settings=core.settings.prod && python manage.py collectstatic --noinput --settings=core.settings.prod

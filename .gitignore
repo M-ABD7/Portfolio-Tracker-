@@ -1,0 +1,39 @@
+# Python / Django
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.sqlite3
+*.log
+*.err.log
+backend/tracker/staticfiles/
+backend/tracker/media/
+backend/tracker/portfolio/market_data/
+backend/venv/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Misc project files
+folders.txt
+structure.txt
+BUG_FIX_TASKS.md
