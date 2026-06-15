@@ -7,16 +7,10 @@ export function getAuthHeader(request: Request): Record<string, string> {
   return { Authorization: `Token ${token}` };
 }
 
-/** Build the Set-Cookie string that stores the auth token (HttpOnly). */
-export function buildAuthCookie(
-  token: string,
-  maxAgeSeconds = 60 * 60 * 24 * 30  // 30 days
-): string {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  return `auth_token=${token}; HttpOnly; Path=/; Max-Age=${maxAgeSeconds}; SameSite=Lax${secure}`;
-}
-
-/** Build the Set-Cookie string that clears the auth token. */
-export function clearAuthCookie(): string {
-  return "auth_token=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax";
-}
+export const AUTH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  path: "/",
+  maxAge: 60 * 60 * 24 * 30,
+  sameSite: "lax" as const,
+  secure: process.env.NODE_ENV === "production",
+} as const;

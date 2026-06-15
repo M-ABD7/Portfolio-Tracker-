@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAuthHeader, clearAuthCookie } from "@/lib/auth-header";
+import { getAuthHeader } from "@/lib/auth-header";
 
 const BACKEND_API_BASE_URL =
   process.env.DJANGO_API_BASE_URL ?? "http://127.0.0.1:8000/api";
@@ -21,6 +21,6 @@ export async function POST(request: Request) {
   }
 
   const res = NextResponse.json({ message: "Logged out." }, { status: 200 });
-  res.headers.set("Set-Cookie", clearAuthCookie());
+  res.cookies.delete("auth_token");
   return res;
 }

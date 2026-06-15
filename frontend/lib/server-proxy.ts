@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { clearAuthCookie, getAuthHeader } from "@/lib/auth-header";
+import { getAuthHeader } from "@/lib/auth-header";
 
 const BACKEND_API_BASE_URL = process.env.DJANGO_API_BASE_URL ?? "http://127.0.0.1:8000/api";
 
@@ -40,7 +40,7 @@ export async function proxyBackend(request: Request, targetPath: string) {
         { status: response.status }
       );
       if (response.status === 401) {
-        res.headers.set("Set-Cookie", clearAuthCookie());
+        res.cookies.delete("auth_token");
       }
       return res;
     }
