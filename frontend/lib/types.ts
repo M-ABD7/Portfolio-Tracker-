@@ -23,6 +23,8 @@ export interface Asset {
   assetClass: AssetClass;
   exchange: string;
   marketSymbol?: string;
+  /** True when this holding is managed by an active exchange sync (read-only in the UI) */
+  isSynced?: boolean;
   /** Per-exchange breakdown when the same symbol is held on multiple exchanges */
   holdings?: Array<{ id: string; exchange: string; quantity: number }>;
 }
@@ -39,6 +41,7 @@ export interface ExchangeData {
 export interface PortfolioSummary {
   totalValue: number;
   totalProfitLoss: number;
+  realizedPnl: number;
   dailyChange: number;
   dailyChangePercentage: number;
 }
@@ -225,4 +228,19 @@ export interface ExchangeSyncResult {
   added: number;
   updated: number;
   warning: string | null;
+}
+
+// ── CSV import types ─────────────────────────────────────────
+
+export interface SkippedCsvRow {
+  row: number;
+  reason: string;
+}
+
+/** Response from /api/portfolio/import-csv/ (Binance Trade History import) */
+export interface CsvImportResponse {
+  message: string;
+  assets: Asset[];
+  realizedPnl: number;
+  skippedRows: SkippedCsvRow[];
 }

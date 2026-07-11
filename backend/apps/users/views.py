@@ -11,6 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView  # noqa: F401
 
 from core.throttles import AuthRateThrottle
+from portfolio.api import get_or_create_profile, serialize_auth_user
 
 from .serializers import RegisterSerializer, UserSerializer
 
@@ -94,7 +95,8 @@ def logout(request):
 @permission_classes([IsAuthenticated])
 def me(request):
     """GET /api/auth/me/"""
-    return Response(UserSerializer(request.user).data)
+    profile = get_or_create_profile(request.user)
+    return Response({"authenticated": True, "user": serialize_auth_user(request.user, profile)})
 
 
 @extend_schema(

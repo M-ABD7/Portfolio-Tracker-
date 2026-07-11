@@ -2,9 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Shield, Users, RefreshCw } from "lucide-react";
+import { Shield, Users, RefreshCw, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui";
-import { fetchAdminUsers, getCurrentUser, updateAdminUser } from "@/lib/api";
+import {
+  deleteAdminUser,
+  fetchAdminUsers,
+  getCurrentUser,
+  updateAdminUser,
+} from "@/lib/api";
 import type { AuthUser } from "@/lib/types";
 
 export default function AdminPanelPage() {
@@ -13,6 +18,7 @@ export default function AdminPanelPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
 
   async function loadUsers() {
     setLoading(true);
@@ -23,6 +29,7 @@ export default function AdminPanelPage() {
         router.replace("/dashboard");
         return;
       }
+      setCurrentUserId(current.id);
       const data = await fetchAdminUsers();
       setUsers(data.users);
     } catch (err) {
@@ -48,6 +55,22 @@ export default function AdminPanelPage() {
       setUsers((prev) => prev.map((u) => (u.id === userId ? user : u)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Update failed.");
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  async function handleDelete(userId: number, username: string) {
+    if (!window.confirm(`Delete user "${username}"? This cannot be undone.`)) {
+      return;
+    }
+    setUpdatingId(userId);
+    setError(null);
+    try {
+      await deleteAdminUser(userId);
+      setUsers((prev) => prev.filter((u) => u.id !== userId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed.");
     } finally {
       setUpdatingId(null);
     }
@@ -104,6 +127,7 @@ export default function AdminPanelPage() {
                     <th className="px-6 py-3 font-medium">Joined</th>
                     <th className="px-6 py-3 font-medium">Active</th>
                     <th className="px-6 py-3 font-medium">Admin</th>
+                    <th className="px-6 py-3 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -150,6 +174,21 @@ export default function AdminPanelPage() {
                             {user.isStaff ? "Admin" : "User"}
                           </span>
                         </label>
+                      </td>
+                      <td className="px-6 py-4">
+                        <button
+                          onClick={() => handleDelete(user.id, user.username)}
+                          disabled={updatingId === user.id || user.id === currentUserId}
+                          title={
+                            user.id === currentUserId
+                              ? "You cannot delete your own account"
+                              : "Delete user"
+                          }
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-accent-danger border border-accent-danger/30 hover:bg-accent-danger/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   ))}

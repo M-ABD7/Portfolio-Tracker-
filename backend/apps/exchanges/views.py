@@ -70,7 +70,7 @@ def exchange_connect(request):
         sync_result = sync_exchange_holdings(connection)
     except Exception as e:
         logger.exception("Initial sync failed for %s/%s", request.user.username, exchange)
-        sync_result = {"synced": 0, "added": 0, "updated": 0, "error": str(e)}
+        sync_result = {"synced": 0, "added": 0, "updated": 0, "removed": 0, "error": str(e)}
 
     # Log the sync attempt
     from .models import ExchangeSyncLog
@@ -178,6 +178,7 @@ def exchange_sync(request, pk):
             "synced": sync_result["synced"],
             "added": sync_result["added"],
             "updated": sync_result["updated"],
+            "removed": sync_result["removed"],
             "warning": connection.permissions_warning or None,
         }
     )

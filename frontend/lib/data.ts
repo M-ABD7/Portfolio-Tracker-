@@ -13,6 +13,7 @@ import type {
 export const portfolioSummary: PortfolioSummary = {
   totalValue: 125430.5,
   totalProfitLoss: 12830.1,
+  realizedPnl: 0,
   dailyChange: -1567.88,
   dailyChangePercentage: -1.25,
 };

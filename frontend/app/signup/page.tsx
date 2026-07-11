@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function SignupPage() {
-  const router = useRouter();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [username, setUsername] = useState("");
@@ -27,8 +25,8 @@ export default function SignupPage() {
       setError("Password must be at least 8 characters.");
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setError("Please enter a valid email address.");
+    if (!/^[^\s@]+@[^\s@]+\.[a-zA-Z]{2,}$/.test(email) || email.includes("..")) {
+      setError("Please enter a valid email address (e.g. name@gmail.com).");
       return;
     }
 
@@ -53,8 +51,7 @@ export default function SignupPage() {
         return;
       }
 
-      router.push("/dashboard");
-      router.refresh();
+      window.location.href = "/onboarding";
     } catch {
       setError("Unable to connect. Please try again.");
     } finally {
@@ -137,6 +134,9 @@ export default function SignupPage() {
               required
               autoComplete="email"
             />
+            <p className="text-xs text-foreground-muted mt-1">
+              Double-check your email — it cannot be changed after registration.
+            </p>
           </div>
 
           <div>

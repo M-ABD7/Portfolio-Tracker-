@@ -9,6 +9,7 @@ import type {
   AuthUser,
   ConnectExchangeInput,
   ConnectExchangeResponse,
+  CsvImportResponse,
   ExchangeConnection,
   ExchangeSyncResult,
   ExchangeData,
@@ -183,6 +184,35 @@ export function deletePortfolioAsset(holdingId: string) {
   );
 }
 
+/**
+ * Upload a Binance Trade History CSV export. Bypasses apiRequest — it
+ * forces Content-Type: application/json, which would break the multipart
+ * boundary FormData needs.
+ */
+export async function uploadBinanceCsv(file: File): Promise<CsvImportResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch("/api/portfolio/import-csv/", {
+    method: "POST",
+    body: formData,
+    cache: "no-store",
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`;
+      return payload as CsvImportResponse;
+    }
+    const message =
+      typeof payload?.error === "string" ? payload.error : "CSV import failed. Please try again.";
+    throw new Error(message);
+  }
+
+  return payload as CsvImportResponse;
+}
+
 // ── Live price ────────────────────────────────────────────────
 
 /**
@@ -228,7 +258,8 @@ export function logoutUser() {
 /** Fetch the current authenticated user's info. */
 export async function getCurrentUser(): Promise<AuthUser | null> {
   try {
-    return await apiRequest<AuthUser>("/api/auth/me/");
+    const data = await apiRequest<{ authenticated: boolean; user: AuthUser | null }>("/api/auth/me/");
+    return data.authenticated ? data.user : null;
   } catch {
     return null;
   }
@@ -260,6 +291,13 @@ export function updateAdminUser(
   return apiRequest<{ user: AuthUser }>(`/api/admin/users/${userId}/`, {
     method: "PATCH",
     body: JSON.stringify(input),
+  });
+}
+
+/** Admin: permanently delete a user account. */
+export function deleteAdminUser(userId: number) {
+  return apiRequest<{ message: string }>(`/api/admin/users/${userId}/`, {
+    method: "DELETE",
   });
 }
 

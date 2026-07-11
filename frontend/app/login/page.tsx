@@ -1,11 +1,10 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect") ?? "/dashboard";
 
@@ -31,8 +30,7 @@ function LoginForm() {
         return;
       }
 
-      router.push(data.user?.isStaff ? "/admin-panel" : redirect);
-      router.refresh();
+      window.location.href = data.user?.isStaff ? "/admin-panel" : redirect;
     } catch {
       setError("Unable to connect. Please try again.");
     } finally {

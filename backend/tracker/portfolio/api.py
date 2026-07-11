@@ -1,11 +1,14 @@
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import struct
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 from collections import defaultdict
 
 import pandas as pd
@@ -14,11 +17,23 @@ from django.contrib.auth.models import User
 from django.db.models import Prefetch
 from django.forms.models import model_to_dict
 from django.utils import timezone
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+
+class OptionalTokenAuthentication(TokenAuthentication):
+    """Return anonymous for invalid/unknown tokens instead of raising 401."""
+    def authenticate(self, request):
+        try:
+            return super().authenticate(request)
+        except AuthenticationFailed:
+            return None
+
+from .csv_import import CsvFormatError, compute_fifo, parse_binance_csv
 from .data_fetcher import clean_ohlc, download_market_data
 from .models import Asset, ExchangeConnection, Holding, Portfolio, PricePoint, Transaction, UserProfile
 from .optimizer import optimize_from_prices
@@ -76,7 +91,10 @@ def denormalize_asset_class(asset_class: str) -> str:
 
 def market_symbol_for_asset(asset: Asset) -> str:
     metadata_symbol = asset.metadata.get("market_symbol")
-    if metadata_symbol:
+    # Only trust metadata_symbol if it looks like a qualified yfinance ticker
+    # (contains '-' or '='). Raw exchange symbols like 'BTC' would resolve to
+    # the wrong ticker on yfinance (e.g. Bit Digital Inc. instead of Bitcoin).
+    if metadata_symbol and ("-" in str(metadata_symbol) or "=" in str(metadata_symbol)):
         return str(metadata_symbol)
 
     symbol = asset.symbol.strip().upper()
@@ -113,6 +131,11 @@ def market_symbol_for_asset(asset: Asset) -> str:
 def get_portfolio(username: str, portfolio_name: str) -> Portfolio:
     user, _ = User.objects.get_or_create(username=username)
     portfolio, _ = Portfolio.objects.get_or_create(user=user, name=portfolio_name)
+    return portfolio
+
+
+def get_or_create_portfolio(user: User) -> Portfolio:
+    portfolio, _ = Portfolio.objects.get_or_create(user=user, name=DEFAULT_PORTFOLIO_NAME)
     return portfolio
 
 
@@ -206,6 +229,10 @@ def get_or_create_profile(user: User) -> UserProfile:
 
 
 def resolve_request_user(request) -> User | None:
+    # DRF populates request.user when JWT Bearer auth succeeds
+    if hasattr(request, "user") and request.user.is_authenticated:
+        return request.user
+    # Legacy DRF Token auth fallback
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Token "):
         return None
@@ -398,7 +425,8 @@ def ensure_asset_history(asset: Asset, *, period: str = "3mo", interval: str = "
 
     try:
         df = download_market_data(market_symbol, period=period, interval=interval)
-    except Exception:
+    except Exception as exc:
+        logger.warning("ensure_asset_history: fetch failed for %s — %s", market_symbol, exc)
         return
 
     if df.empty:
@@ -472,6 +500,7 @@ def serialize_holding(holding: Holding) -> dict:
         "plPercentage": profit_loss_percentage,
         "assetClass": normalize_asset_class(holding.asset.asset_type),
         "exchange": holding.metadata.get("exchange") or holding.asset.metadata.get("exchange", "Manual"),
+        "isSynced": holding.metadata.get("source") == "sync",
     }
 
 
@@ -489,6 +518,13 @@ def grouped_exchange_data(assets: list[dict]) -> list[dict]:
         }
         for exchange_name, exchange_assets in sorted(grouped_exchanges.items())
     ]
+
+
+def realized_pnl_for_portfolio(portfolio: Portfolio) -> float:
+    total = 0.0
+    for tx in Transaction.objects.filter(portfolio=portfolio, transaction_type="sell"):
+        total += tx.metadata.get("realized_pnl", 0) or 0
+    return total
 
 
 def build_overview_payload(portfolio: Portfolio, *, refresh_history: bool = True) -> dict:
@@ -518,13 +554,36 @@ def build_overview_payload(portfolio: Portfolio, *, refresh_history: bool = True
             }
         )
 
+    # Merge holdings that share a symbol (same asset on multiple exchanges)
+    symbol_map: dict[str, dict] = {}
+    for asset in assets:
+        sym = asset["symbol"]
+        if sym not in symbol_map:
+            symbol_map[sym] = asset.copy()
+        else:
+            existing = symbol_map[sym]
+            merged_qty  = existing["quantity"] + asset["quantity"]
+            merged_cost = existing["avgBuyPrice"] * existing["quantity"] + asset["avgBuyPrice"] * asset["quantity"]
+            merged_value = existing["value"] + asset["value"]
+            merged_pl   = existing["pl"] + asset["pl"]
+            avg_buy = merged_cost / merged_qty if merged_qty else 0
+            pl_pct  = (merged_pl / merged_cost * 100) if merged_cost else 0
+            symbol_map[sym] = {
+                **existing,
+                "quantity":     merged_qty,
+                "value":        merged_value,
+                "pl":           merged_pl,
+                "plPercentage": pl_pct,
+                "avgBuyPrice":  avg_buy,
+            }
+
     top_performers = [
         {
-            "name": asset["name"],
-            "symbol": asset["symbol"],
+            "name":             asset["name"],
+            "symbol":           asset["symbol"],
             "changePercentage": asset["plPercentage"],
         }
-        for asset in sorted(assets, key=lambda item: item["plPercentage"], reverse=True)[:5]
+        for asset in sorted(symbol_map.values(), key=lambda a: a["plPercentage"], reverse=True)[:5]
     ]
 
     return {
@@ -535,6 +594,7 @@ def build_overview_payload(portfolio: Portfolio, *, refresh_history: bool = True
         "summary": {
             "totalValue": total_value,
             "totalProfitLoss": total_profit_loss,
+            "realizedPnl": realized_pnl_for_portfolio(portfolio),
             "dailyChange": 0,
             "dailyChangePercentage": 0,
         },
@@ -612,10 +672,14 @@ def compute_signal_from_series(close_series: pd.Series) -> tuple[str, str]:
 def build_asset_performance(holdings: list[Holding], period: str) -> list[dict]:
     period_limits = {"7d": 7, "1m": 30, "3m": 90}
     history_length = period_limits.get(period, 30)
-    color_palette = ["#00d9ff", "#a855f7", "#f59e0b", "#22c55e", "#ef4444"]
+    color_palette = [
+        "#00d9ff", "#a855f7", "#f59e0b", "#22c55e", "#ef4444",
+        "#f97316", "#06b6d4", "#ec4899", "#84cc16", "#6366f1",
+        "#14b8a6", "#e11d48", "#8b5cf6", "#0ea5e9", "#d97706",
+    ]
     performance = []
 
-    for index, holding in enumerate(holdings[:5]):
+    for index, holding in enumerate(holdings):
         points = ordered_price_points_for_asset(holding.asset, market_only=True)[-history_length:]
         if not points:
             continue
@@ -735,16 +799,21 @@ def build_insights_payload(portfolio: Portfolio) -> dict:
     total_value = overview["summary"]["totalValue"]
 
     recommendations = []
+    seen_symbols: set[str] = set()
     for holding in holdings:
+        sym = holding.asset.symbol
+        if sym in seen_symbols:
+            continue
+        seen_symbols.add(sym)
         close_series = pd.Series([point.close for point in ordered_price_points_for_asset(holding.asset, market_only=True)])
         signal, reason = compute_signal_from_series(close_series)
         recommendations.append(
             {
-                "type": signal.lower(),
-                "asset": holding.asset.name,
-                "symbol": holding.asset.symbol,
+                "type":   signal.lower(),
+                "asset":  holding.asset.name,
+                "symbol": sym,
                 "reason": reason,
-                "color": SIGNAL_COLORS[signal],
+                "color":  SIGNAL_COLORS[signal],
             }
         )
 
@@ -828,14 +897,23 @@ def auth_register(request):
     username = str(request.data.get("username", "")).strip()
     password = str(request.data.get("password", ""))
     email = str(request.data.get("email", "")).strip()
-    display_name = str(request.data.get("displayName", username)).strip() or username
+    first_name = str(request.data.get("first_name", "")).strip()
+    last_name = str(request.data.get("last_name", "")).strip()
+    display_name = (
+        str(request.data.get("displayName", "")).strip()
+        or f"{first_name} {last_name}".strip()
+        or username
+    )
 
     if not username or not password:
         return Response({"error": "Username and password are required."}, status=400)
     if User.objects.filter(username=username).exists():
         return Response({"error": "That username is already taken."}, status=400)
 
-    user = User.objects.create_user(username=username, password=password, email=email, first_name=display_name)
+    user = User.objects.create_user(
+        username=username, password=password, email=email,
+        first_name=first_name, last_name=last_name,
+    )
     profile = get_or_create_profile(user)
     profile.display_name = display_name
     profile.save(update_fields=["display_name"])
@@ -858,6 +936,17 @@ def auth_login(request):
     password = str(request.data.get("password", ""))
     otp = str(request.data.get("otp", "")).strip()
     user = authenticate(username=username, password=password)
+
+    # Auto-provision the demo account on first login attempt
+    if user is None and username == "demo":
+        demo_user, created = User.objects.get_or_create(username="demo")
+        if created or not demo_user.has_usable_password():
+            demo_user.set_password("demo1234")
+            demo_user.save(update_fields=["password"])
+            get_or_create_profile(demo_user)
+            Portfolio.objects.get_or_create(user=demo_user, name=DEFAULT_PORTFOLIO_NAME)
+        user = authenticate(username="demo", password="demo1234")
+
     if user is None:
         return Response({"error": "Invalid username or password."}, status=400)
     if not user.is_active:
@@ -933,7 +1022,7 @@ def admin_users(request):
     return Response({"users": payload})
 
 
-@api_view(["PATCH"])
+@api_view(["PATCH", "DELETE"])
 def admin_user_detail(request, user_id: int):
     actor = resolve_request_user(request)
     if actor is None:
@@ -944,6 +1033,13 @@ def admin_user_detail(request, user_id: int):
     target = User.objects.filter(id=user_id).first()
     if target is None:
         return Response({"error": "User not found."}, status=404)
+
+    if request.method == "DELETE":
+        if target.id == actor.id:
+            return Response({"error": "You cannot delete your own account."}, status=400)
+        target.delete()
+        return Response({"message": "User deleted."})
+
     if target.id == actor.id and request.data.get("isActive") is False:
         return Response({"error": "You cannot deactivate your own account."}, status=400)
 
@@ -1168,6 +1264,53 @@ def portfolio_transactions(request):
 
 
 @api_view(["DELETE"])
+def portfolio_transaction_detail(request, transaction_id: int):
+    """Revert (undo) a single transaction by ID, adjusting the holding accordingly."""
+    username = get_requested_username(request)
+    portfolio = find_portfolio(username, DEFAULT_PORTFOLIO_NAME)
+    if portfolio is None:
+        return Response({"error": "Portfolio not found."}, status=404)
+
+    tx = Transaction.objects.select_related("asset").filter(portfolio=portfolio, id=transaction_id).first()
+    if tx is None:
+        return Response({"error": "Transaction not found."}, status=404)
+
+    exchange = tx.metadata.get("exchange", "Manual")
+    holding = Holding.objects.filter(portfolio=portfolio, asset=tx.asset, metadata__exchange=exchange).first()
+
+    if tx.transaction_type == "buy":
+        if holding is not None:
+            new_qty = float(holding.quantity) - float(tx.quantity)
+            if new_qty <= 1e-10:
+                holding.delete()
+            else:
+                holding.quantity = new_qty
+                holding.save(update_fields=["quantity"])
+
+    elif tx.transaction_type == "sell":
+        if holding is not None:
+            total_existing_cost = float(holding.quantity) * float(holding.cost_basis or 0)
+            total_reverted_cost = float(tx.quantity) * float(tx.price)
+            new_qty = float(holding.quantity) + float(tx.quantity)
+            holding.cost_basis = (total_existing_cost + total_reverted_cost) / new_qty
+            holding.quantity = new_qty
+            holding.save(update_fields=["quantity", "cost_basis"])
+        else:
+            Holding.objects.create(
+                portfolio=portfolio,
+                asset=tx.asset,
+                quantity=tx.quantity,
+                cost_basis=tx.price,
+                metadata={"exchange": exchange},
+            )
+
+    # transfer: just remove the log entry; holdings were already settled by portfolio_transfer
+
+    tx.delete()
+    return Response({"message": "Transaction reverted."})
+
+
+@api_view(["DELETE"])
 def portfolio_asset_detail(request, holding_id: int):
     """Delete a single holding by its ID."""
     username = get_requested_username(request)
@@ -1181,6 +1324,104 @@ def portfolio_asset_detail(request, holding_id: int):
     symbol = holding.asset.symbol
     holding.delete()
     return Response({"message": f"Holding {symbol} (id={holding_id}) deleted."})
+
+
+@api_view(["POST"])
+def portfolio_transfer(request):
+    """Transfer crypto holdings from one exchange to another."""
+    username = get_requested_username(request)
+    portfolio = find_portfolio(username, DEFAULT_PORTFOLIO_NAME)
+    if portfolio is None:
+        return Response({"error": "Portfolio not found."}, status=404)
+
+    try:
+        from_holding_id = int(request.data.get("fromHoldingId", 0))
+        quantity = float(request.data.get("quantity", 0))
+    except (TypeError, ValueError):
+        return Response({"error": "fromHoldingId and quantity must be numeric."}, status=400)
+
+    to_exchange = str(request.data.get("toExchange", "")).strip()
+
+    if not to_exchange:
+        return Response({"error": "Destination exchange is required."}, status=400)
+    if quantity <= 0:
+        return Response({"error": "Quantity must be greater than zero."}, status=400)
+
+    source = Holding.objects.select_related("asset").filter(
+        portfolio=portfolio, id=from_holding_id
+    ).first()
+    if source is None:
+        return Response({"error": "Source holding not found."}, status=404)
+
+    if source.asset.asset_type != "crypto":
+        return Response({"error": "Transfer is only supported for crypto assets."}, status=400)
+
+    if quantity > source.quantity:
+        return Response(
+            {"error": f"Cannot transfer {quantity} — only {source.quantity} held on {source.metadata.get('exchange', '?')}."},
+            status=400,
+        )
+
+    from_exchange = source.metadata.get("exchange", "Manual")
+    if to_exchange.lower() == from_exchange.lower():
+        return Response({"error": "Source and destination exchange must be different."}, status=400)
+
+    source_cost_basis = float(source.cost_basis or 0)
+
+    # Reduce or delete source holding
+    if abs(quantity - source.quantity) < 1e-9:
+        source.delete()
+        from_holding_serialized = None
+    else:
+        source.quantity = round(source.quantity - quantity, 10)
+        source.save(update_fields=["quantity"])
+        refreshed_source = Holding.objects.select_related("asset").prefetch_related(
+            "asset__price_points"
+        ).get(pk=source.pk)
+        from_holding_serialized = serialize_holding(refreshed_source)
+
+    # Find or create destination holding, preserving weighted-average cost basis
+    dest = Holding.objects.filter(
+        portfolio=portfolio,
+        asset=source.asset,
+        metadata__exchange=to_exchange,
+    ).first()
+
+    if dest:
+        existing_cost = float(dest.quantity) * float(dest.cost_basis or 0)
+        transfer_cost = quantity * source_cost_basis
+        new_qty = float(dest.quantity) + quantity
+        dest.cost_basis = (existing_cost + transfer_cost) / new_qty if new_qty else source_cost_basis
+        dest.quantity = new_qty
+        dest.save(update_fields=["quantity", "cost_basis"])
+    else:
+        dest = Holding.objects.create(
+            portfolio=portfolio,
+            asset=source.asset,
+            quantity=quantity,
+            cost_basis=source_cost_basis,
+            metadata={"exchange": to_exchange},
+        )
+
+    Transaction.objects.create(
+        portfolio=portfolio,
+        asset=source.asset,
+        transaction_type="transfer",
+        quantity=quantity,
+        price=source_cost_basis,
+        total=quantity * source_cost_basis,
+        metadata={"from_exchange": from_exchange, "to_exchange": to_exchange},
+    )
+
+    refreshed_dest = Holding.objects.select_related("asset").prefetch_related(
+        "asset__price_points"
+    ).get(pk=dest.pk)
+
+    return Response({
+        "message": f"Transferred {quantity} {source.asset.symbol} from {from_exchange} to {to_exchange}.",
+        "from": from_holding_serialized,
+        "to": serialize_holding(refreshed_dest),
+    })
 
 
 
@@ -1237,23 +1478,44 @@ def portfolio_assets(request):
         metadata__exchange=exchange,
     ).first()
 
-    if holding:
-        total_existing_cost = float(holding.quantity) * float(holding.cost_basis or 0)
-        total_new_cost = quantity * avg_buy_price
-        combined_quantity = float(holding.quantity) + quantity
-        holding.cost_basis = (
-            (total_existing_cost + total_new_cost) / combined_quantity if combined_quantity else avg_buy_price
-        )
-        holding.quantity = combined_quantity
-        holding.save(update_fields=["quantity", "cost_basis"])
+    cost_basis_before_sell = float(holding.cost_basis or 0) if holding else 0
+    tx_meta: dict = {"exchange": exchange}
+
+    if transaction_type == "sell":
+        if not holding:
+            return Response({"error": "No holding found to sell."}, status=400)
+        if quantity > float(holding.quantity):
+            return Response(
+                {"error": f"Cannot sell {quantity} — only {holding.quantity} held on {exchange}."},
+                status=400,
+            )
+        realized_pnl = (avg_buy_price - cost_basis_before_sell) * quantity
+        tx_meta["realized_pnl"] = realized_pnl
+        new_quantity = float(holding.quantity) - quantity
+        if new_quantity <= 1e-10:
+            holding.delete()
+            holding = None
+        else:
+            holding.quantity = new_quantity
+            holding.save(update_fields=["quantity"])
     else:
-        holding = Holding.objects.create(
-            portfolio=portfolio,
-            asset=asset,
-            quantity=quantity,
-            cost_basis=avg_buy_price,
-            metadata={"exchange": exchange},
-        )
+        if holding:
+            total_existing_cost = float(holding.quantity) * float(holding.cost_basis or 0)
+            total_new_cost = quantity * avg_buy_price
+            combined_quantity = float(holding.quantity) + quantity
+            holding.cost_basis = (
+                (total_existing_cost + total_new_cost) / combined_quantity if combined_quantity else avg_buy_price
+            )
+            holding.quantity = combined_quantity
+            holding.save(update_fields=["quantity", "cost_basis"])
+        else:
+            holding = Holding.objects.create(
+                portfolio=portfolio,
+                asset=asset,
+                quantity=quantity,
+                cost_basis=avg_buy_price,
+                metadata={"exchange": exchange},
+            )
 
     price_timestamp = timezone.now().replace(second=0, microsecond=0)
     PricePoint.objects.update_or_create(
@@ -1277,8 +1539,11 @@ def portfolio_assets(request):
         quantity=quantity,
         price=current_price,
         total=quantity * current_price,
-        metadata={"exchange": exchange},
+        metadata=tx_meta,
     )
+
+    if holding is None:
+        return Response({"message": "Asset fully sold and removed from portfolio.", "asset": None}, status=201)
 
     refreshed_holding = Holding.objects.select_related("asset").prefetch_related(
         "asset__price_points"
@@ -1292,6 +1557,97 @@ def portfolio_assets(request):
         status=201,
     )
 
+
+
+@api_view(["POST"])
+def import_binance_csv(request):
+    """Imports a Binance Trade History CSV, FIFO-matches buys/sells per asset,
+    and persists the resulting holdings + per-trade realized PnL."""
+    username = get_requested_username(request)
+    portfolio_name = DEFAULT_PORTFOLIO_NAME
+    exchange = "Binance"
+
+    uploaded_file = request.FILES.get("file")
+    if uploaded_file is None:
+        return Response({"error": "No file uploaded. Attach the CSV under the 'file' field."}, status=400)
+
+    try:
+        trades, skipped = parse_binance_csv(uploaded_file)
+    except CsvFormatError as exc:
+        return Response({"error": str(exc)}, status=400)
+
+    if not trades:
+        return Response(
+            {"error": "No usable trade rows found in the file.", "skippedRows": skipped},
+            status=400,
+        )
+
+    fifo_results = compute_fifo(trades)
+    portfolio = get_portfolio(username, portfolio_name)
+    touched_holdings = []
+
+    for symbol, result in fifo_results.items():
+        asset, _ = Asset.objects.get_or_create(
+            symbol=symbol,
+            defaults={"name": symbol, "asset_type": "crypto", "metadata": {}},
+        )
+        if asset.asset_type != "crypto":
+            asset.asset_type = "crypto"
+            asset.save(update_fields=["asset_type"])
+
+        holding = Holding.objects.filter(
+            portfolio=portfolio, asset=asset, metadata__exchange=exchange
+        ).first()
+
+        if result.remaining_quantity > 1e-12:
+            if holding:
+                holding.quantity = result.remaining_quantity
+                holding.cost_basis = result.avg_cost_basis
+                holding.save(update_fields=["quantity", "cost_basis"])
+            else:
+                holding = Holding.objects.create(
+                    portfolio=portfolio,
+                    asset=asset,
+                    quantity=result.remaining_quantity,
+                    cost_basis=result.avg_cost_basis,
+                    metadata={"exchange": exchange},
+                )
+        elif holding:
+            holding.delete()
+            holding = None
+
+        for processed in result.processed_trades:
+            row = processed.row
+            tx_meta = {"exchange": exchange, "source": "csv_import"}
+            if processed.realized_pnl is not None:
+                tx_meta["realized_pnl"] = processed.realized_pnl
+            Transaction.objects.create(
+                portfolio=portfolio,
+                asset=asset,
+                transaction_type=row.side,
+                quantity=row.quantity,
+                price=row.price,
+                total=row.notional,
+                metadata=tx_meta,
+            )
+
+        ensure_asset_history(asset, period="6mo")
+
+        if holding is not None:
+            refreshed_holding = Holding.objects.select_related("asset").prefetch_related(
+                "asset__price_points"
+            ).get(pk=holding.pk)
+            touched_holdings.append(serialize_holding(refreshed_holding))
+
+    return Response(
+        {
+            "message": f"Imported {len(trades)} trade row(s) across {len(fifo_results)} asset(s).",
+            "assets": touched_holdings,
+            "realizedPnl": realized_pnl_for_portfolio(portfolio),
+            "skippedRows": skipped,
+        },
+        status=201,
+    )
 
 
 @api_view(["GET"])

@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Button, Tabs, Card, CardContent, CardHeader, CardTitle, Badge } from "@/components/ui";
 import { fetchPortfolioAnalytics, fetchPortfolioOverview } from "@/lib/api";
-import type { PortfolioAnalytics, PLByAssetClass, Asset } from "@/lib/types";
+import type { PortfolioAnalytics, PLByAssetClass, Asset, AssetClass, AssetPerformance } from "@/lib/types";
 import type { PortfolioOverviewResponse } from "@/lib/api";
 import { ArrowLeft, TrendingUp, TrendingDown, DollarSign, BarChart2, RefreshCw } from "lucide-react";
 import { formatCurrency, formatPercentage, formatQuantity, cn } from "@/lib/utils";
@@ -15,11 +15,19 @@ import {
 } from "recharts";
 
 type TimePeriod = "7d" | "1m" | "3m";
+type AssetFilter = "all" | AssetClass;
 
 const timePeriodTabs = [
   { id: "7d", label: "Last 7 Days" },
   { id: "1m", label: "1 Month" },
   { id: "3m", label: "3 Months" },
+];
+
+const assetFilterTabs = [
+  { id: "all", label: "All" },
+  { id: "crypto", label: "Crypto" },
+  { id: "forex", label: "Forex" },
+  { id: "commodities", label: "Commodities" },
 ];
 
 const tooltipStyle = {
@@ -54,6 +62,23 @@ function aggregateAssetsBySymbol(assets: Asset[]) {
   return [...grouped.values()].sort((a, b) => b.value - a.value);
 }
 
+function deduplicatePerformanceData(data: AssetPerformance[]): AssetPerformance[] {
+  const merged = new Map<string, AssetPerformance>();
+  for (const entry of data) {
+    const existing = merged.get(entry.symbol);
+    if (!existing) {
+      merged.set(entry.symbol, { ...entry, data: [...entry.data] });
+      continue;
+    }
+    const dayMap = new Map(existing.data.map((d) => [d.day, d.value]));
+    for (const d of entry.data) {
+      dayMap.set(d.day, (dayMap.get(d.day) ?? 0) + d.value);
+    }
+    existing.data = Array.from(dayMap, ([day, value]) => ({ day, value }));
+  }
+  return [...merged.values()];
+}
+
 function StatCard({ label, value, sub, positive, icon }: {
   label: string; value: string; sub?: string; positive?: boolean; icon: React.ReactNode;
 }) {
@@ -79,7 +104,17 @@ function StatCard({ label, value, sub, positive, icon }: {
   );
 }
 
-function AreaPerformanceChart({ data }: { data: PortfolioAnalytics["assetPerformance"] }) {
+function AreaPerformanceChart({ data }: { data: AssetPerformance[] }) {
+  const [visibleSymbols, setVisibleSymbols] = useState<Set<string>>(
+    () => new Set(data.map((a) => a.symbol))
+  );
+
+  // Reset visibility when the asset list changes (new data / filter change)
+  const symbolKey = data.map((a) => a.symbol).join(",");
+  useEffect(() => {
+    setVisibleSymbols(new Set(data.map((a) => a.symbol)));
+  }, [symbolKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!data || data.length === 0) {
     return (
       <Card className="h-full">
@@ -90,6 +125,9 @@ function AreaPerformanceChart({ data }: { data: PortfolioAnalytics["assetPerform
       </Card>
     );
   }
+
+  const visibleData = data.filter((a) => visibleSymbols.has(a.symbol));
+
   const daySet = new Set<string>();
   data.forEach((a) => a.data.forEach((d) => daySet.add(d.day)));
   const sortedDays = Array.from(daySet).sort(
@@ -99,20 +137,61 @@ function AreaPerformanceChart({ data }: { data: PortfolioAnalytics["assetPerform
   );
   const chartData = sortedDays.map((day) => {
     const point: Record<string, string | number | null> = { day };
-    data.forEach((asset) => {
+    visibleData.forEach((asset) => {
       point[asset.symbol] = asset.data.find((d) => d.day === day)?.value ?? null;
     });
     return point;
   });
+
+  function toggleSymbol(symbol: string) {
+    setVisibleSymbols((prev) => {
+      const next = new Set(prev);
+      if (next.has(symbol)) {
+        // Keep at least one line visible
+        if (next.size > 1) next.delete(symbol);
+      } else {
+        next.add(symbol);
+      }
+      return next;
+    });
+  }
+
   return (
     <Card className="h-full">
       <CardHeader><CardTitle>Asset Performance Over Time</CardTitle></CardHeader>
       <CardContent>
-        <div className="h-72">
+        {/* Asset toggles */}
+        <div className="flex flex-wrap gap-x-4 gap-y-2 mb-4">
+          {data.map((a) => {
+            const on = visibleSymbols.has(a.symbol);
+            return (
+              <label
+                key={a.symbol}
+                className="flex items-center gap-1.5 cursor-pointer select-none"
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggleSymbol(a.symbol)}
+                  className="sr-only"
+                />
+                <span
+                  className="w-3 h-3 rounded-sm shrink-0 transition-opacity"
+                  style={{ backgroundColor: a.color, opacity: on ? 1 : 0.25 }}
+                />
+                <span className={cn("text-xs font-medium transition-colors", on ? "text-foreground" : "text-foreground-muted")}>
+                  {a.symbol}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData}>
               <defs>
-                {data.map((a) => (
+                {visibleData.map((a) => (
                   <linearGradient key={a.symbol} id={`grad-${a.symbol}`} x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor={a.color} stopOpacity={0.3} />
                     <stop offset="95%" stopColor={a.color} stopOpacity={0} />
@@ -126,9 +205,7 @@ function AreaPerformanceChart({ data }: { data: PortfolioAnalytics["assetPerform
               <Tooltip contentStyle={tooltipStyle}
                 formatter={(v) => typeof v === "number"
                   ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v) : v} />
-              <Legend verticalAlign="top" height={32}
-                formatter={(val) => <span className="text-foreground-muted text-xs">{val}</span>} />
-              {data.map((a) => (
+              {visibleData.map((a) => (
                 <Area key={a.symbol} type="monotone" dataKey={a.symbol} name={a.name}
                   stroke={a.color} strokeWidth={2} fill={`url(#grad-${a.symbol})`}
                   dot={false} connectNulls activeDot={{ r: 5, strokeWidth: 0 }} />
@@ -272,6 +349,7 @@ function AssetMetricsTable({ assets }: { assets: Asset[] }) {
 
 export default function AnalyticsPage() {
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("1m");
+  const [assetFilter, setAssetFilter] = useState<AssetFilter>("all");
   const [analytics,  setAnalytics]  = useState<PortfolioAnalytics | null>(null);
   const [overview,   setOverview]   = useState<PortfolioOverviewResponse | null>(null);
   const [loading,    setLoading]    = useState(true);
@@ -294,6 +372,36 @@ export default function AnalyticsPage() {
   const totalPL    = overview?.summary.totalProfitLoss ?? 0;
   const totalCost  = assets.reduce((s, a) => s + a.avgBuyPrice * a.quantity, 0);
   const plPct      = totalCost > 0 ? (totalPL / totalCost) * 100 : 0;
+
+  // Build symbol → assetClass lookup from overview assets
+  const symbolClassMap = useMemo(() => {
+    const m = new Map<string, AssetClass>();
+    for (const a of overview?.assets ?? []) m.set(a.symbol, a.assetClass);
+    return m;
+  }, [overview]);
+
+  // Deduplicate performance data (merge same symbol across exchanges)
+  const dedupedPerformance = useMemo(
+    () => deduplicatePerformanceData(analytics?.assetPerformance ?? []),
+    [analytics]
+  );
+
+  // Apply asset class filter
+  const filteredPerformance = useMemo(
+    () =>
+      assetFilter === "all"
+        ? dedupedPerformance
+        : dedupedPerformance.filter((a) => symbolClassMap.get(a.symbol) === assetFilter),
+    [assetFilter, dedupedPerformance, symbolClassMap]
+  );
+
+  const filteredAssets = useMemo(
+    () =>
+      assetFilter === "all"
+        ? assets
+        : assets.filter((a) => a.assetClass === assetFilter),
+    [assetFilter, assets]
+  );
 
   return (
     <div className="space-y-8">
@@ -323,17 +431,29 @@ export default function AnalyticsPage() {
             <StatCard label="Total Profit / Loss" value={formatCurrency(totalPL)} sub={`${totalPL >= 0 ? "+" : ""}${formatCurrency(totalPL)} all time`} positive={totalPL >= 0} icon={totalPL >= 0 ? <TrendingUp className="w-5 h-5 text-accent-success" /> : <TrendingDown className="w-5 h-5 text-accent-danger" />} />
             <StatCard label="Return on Investment" value={formatPercentage(plPct)} sub="vs. average buy price" positive={plPct >= 0} icon={plPct >= 0 ? <TrendingUp className="w-5 h-5 text-accent-success" /> : <TrendingDown className="w-5 h-5 text-accent-danger" />} />
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <AreaPerformanceChart data={analytics?.assetPerformance ?? []} />
-            <PLBarChart data={analytics?.plByAssetClass ?? []} />
+
+          {/* Asset class filter */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-foreground">Performance & Metrics</h2>
+              <Tabs
+                tabs={assetFilterTabs}
+                defaultTab="all"
+                variant="pills"
+                onChange={(id) => setAssetFilter(id as AssetFilter)}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <AreaPerformanceChart data={filteredPerformance} />
+              <PLBarChart data={analytics?.plByAssetClass ?? []} />
+            </div>
           </div>
-          <WinnersLosers assets={assets} />
-          <AssetMetricsTable assets={assets} />
+
+          <WinnersLosers assets={filteredAssets} />
+          <AssetMetricsTable assets={filteredAssets} />
         </>
       )}
     </div>
   );
 }
-
-
-

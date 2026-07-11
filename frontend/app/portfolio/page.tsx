@@ -8,29 +8,34 @@ import { AssetTable } from "@/components/portfolio";
 import {
   deletePortfolioAsset,
   fetchPortfolioOverview,
+  listExchangeConnections,
   sellPortfolioAsset,
+  syncExchangeConnection,
   transferPortfolioAsset,
   type PortfolioOverviewResponse,
 } from "@/lib/api";
-import { Sparkles, PlusCircle } from "lucide-react";
-import type { Asset, AssetClass, ExchangeData } from "@/lib/types";
+import { Sparkles, PlusCircle, Link2, RefreshCw } from "lucide-react";
+import type { Asset, AssetClass, ExchangeConnection, ExchangeData } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 
+type PortfolioTab = "all" | AssetClass;
+
 const assetClassTabs = [
+  { id: "all", label: "All Assets" },
   { id: "crypto", label: "Crypto" },
   { id: "forex", label: "Forex" },
   { id: "commodities", label: "Commodities" },
 ];
 
-const VALID_TABS = new Set<AssetClass>(["crypto", "forex", "commodities"]);
+const VALID_TABS = new Set<PortfolioTab>(["all", "crypto", "forex", "commodities"]);
 
 function PortfolioContent() {
   const searchParams = useSearchParams();
-  const tabParam = searchParams.get("tab") as AssetClass | null;
-  const initialTab: AssetClass =
-    tabParam && VALID_TABS.has(tabParam) ? tabParam : "crypto";
+  const tabParam = searchParams.get("tab") as PortfolioTab | null;
+  const initialTab: PortfolioTab =
+    tabParam && VALID_TABS.has(tabParam) ? tabParam : "all";
 
-  const [activeAssetClass, setActiveAssetClass] = useState<AssetClass>(initialTab);
+  const [activeAssetClass, setActiveAssetClass] = useState<PortfolioTab>(initialTab);
   const [overview, setOverview] = useState<PortfolioOverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
@@ -50,6 +55,12 @@ function PortfolioContent() {
   const [transferModalError, setTransferModalError] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
+
+  // ── Exchange sync ────────────────────────────────────────────────────────────
+  const [connections, setConnections] = useState<ExchangeConnection[]>([]);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncSuccess, setSyncSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -75,6 +86,20 @@ function PortfolioContent() {
     return () => {
       isMounted = false;
       window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    listExchangeConnections()
+      .then((data) => {
+        if (isMounted) setConnections(data.connections);
+      })
+      .catch(() => {
+        // Non-fatal — the Sync Exchanges button simply stays disabled.
+      });
+    return () => {
+      isMounted = false;
     };
   }, []);
 
@@ -199,8 +224,8 @@ function PortfolioContent() {
       );
       return;
     }
-    if (!transferToExchange.trim()) {
-      setTransferModalError("Enter the destination exchange.");
+    if (!transferToExchange) {
+      setTransferModalError("Select a destination exchange.");
       return;
     }
     if (transferToExchange.trim().toLowerCase() === assetToTransfer.exchange.toLowerCase()) {
@@ -231,15 +256,87 @@ function PortfolioContent() {
     }
   };
 
+  // ── Exchange Sync ───────────────────────────────────────────────────────────
+
+  const handleSyncAll = async () => {
+    if (syncingAll || connections.length === 0) return;
+
+    setSyncingAll(true);
+    setSyncError(null);
+    setSyncSuccess(null);
+
+    const results = await Promise.allSettled(
+      connections.map((conn) => syncExchangeConnection(conn.id))
+    );
+
+    let succeededCount = 0;
+    let totalSynced = 0;
+    let failedCount = 0;
+    let firstErrorMessage: string | null = null;
+
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        succeededCount += 1;
+        totalSynced += result.value.synced;
+      } else {
+        failedCount += 1;
+        if (!firstErrorMessage) {
+          firstErrorMessage = result.reason instanceof Error ? result.reason.message : "Sync failed.";
+        }
+      }
+    }
+
+    if (succeededCount > 0) {
+      setSyncSuccess(
+        `Synced ${succeededCount} exchange${succeededCount !== 1 ? "s" : ""} (${totalSynced} balance${totalSynced !== 1 ? "s" : ""} updated).`
+      );
+    }
+    if (failedCount > 0) {
+      setSyncError(
+        failedCount === connections.length
+          ? `Failed to sync ${failedCount} exchange${failedCount !== 1 ? "s" : ""}: ${firstErrorMessage}`
+          : `${failedCount} of ${connections.length} exchange${connections.length !== 1 ? "s" : ""} failed to sync: ${firstErrorMessage}`
+      );
+    }
+
+    if (succeededCount > 0) {
+      try {
+        setOverview(await fetchPortfolioOverview());
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load portfolio data.");
+      }
+    }
+
+    listExchangeConnections()
+      .then((data) => setConnections(data.connections))
+      .catch(() => {});
+
+    setSyncingAll(false);
+  };
+
   // ── Derived data ─────────────────────────────────────────────────────────────
 
-  // Build per-exchange sections for the active asset class, sorted FIFO (lowest holding id first)
+  // Per-class PnL summary (computed from filtered assets)
+  const classAssets = overview
+    ? activeAssetClass === "all"
+      ? overview.assets
+      : overview.assets.filter((a) => a.assetClass === activeAssetClass)
+    : [];
+  const classValue = activeAssetClass === "all"
+    ? (overview?.summary.totalValue ?? 0)
+    : classAssets.reduce((s, a) => s + a.value, 0);
+  const classUnrealizedPnl = classAssets.reduce((s, a) => s + a.pl, 0);
+  const classRealizedPnl = activeAssetClass === "all" ? (overview?.summary.realizedPnl ?? 0) : null;
+
+  // Build per-exchange sections for the active tab, sorted FIFO (lowest holding id first)
   const exchangeSections: { exchange: ExchangeData; assets: Asset[] }[] = [];
   if (overview) {
     const sections = overview.exchangeData
       .map((ex) => ({
         exchange: ex,
-        assets: ex.assets.filter((a) => a.assetClass === activeAssetClass),
+        assets: activeAssetClass === "all"
+          ? ex.assets
+          : ex.assets.filter((a) => a.assetClass === activeAssetClass),
       }))
       .filter((s) => s.assets.length > 0);
 
@@ -268,6 +365,23 @@ function PortfolioContent() {
           </p>
         </div>
         <div className="flex gap-2">
+          {(activeAssetClass === "all" || activeAssetClass === "crypto") && (
+            <Button
+              variant="outline"
+              onClick={handleSyncAll}
+              disabled={syncingAll || connections.length === 0}
+              title={connections.length === 0 ? "Connect an exchange to sync" : undefined}
+            >
+              <RefreshCw className={`w-4 h-4 ${syncingAll ? "animate-spin" : ""}`} />
+              {syncingAll ? "Syncing..." : "Sync Exchanges"}
+            </Button>
+          )}
+          <Link href="/onboarding">
+            <Button variant="outline">
+              <Link2 className="w-4 h-4" />
+              Connect Exchange
+            </Button>
+          </Link>
           <Link href="/add-assets">
             <Button variant="outline">
               <PlusCircle className="w-4 h-4" />
@@ -283,10 +397,21 @@ function PortfolioContent() {
         </div>
       </div>
 
+      {syncError && (
+        <div className="rounded-lg border border-accent-danger/30 bg-accent-danger/10 px-4 py-3 text-sm text-accent-danger">
+          {syncError}
+        </div>
+      )}
+      {syncSuccess && (
+        <div className="rounded-lg border border-accent-success/30 bg-accent-success/10 px-4 py-3 text-sm text-accent-success">
+          {syncSuccess}
+        </div>
+      )}
+
       <Tabs
         tabs={assetClassTabs}
         defaultTab={activeAssetClass}
-        onChange={(id) => setActiveAssetClass(id as AssetClass)}
+        onChange={(id) => setActiveAssetClass(id as PortfolioTab)}
       />
 
       {loading && (
@@ -298,6 +423,46 @@ function PortfolioContent() {
       {error && (
         <div className="rounded-2xl border border-accent-danger/30 bg-accent-danger/10 px-6 py-4 text-sm text-accent-danger">
           {error}
+        </div>
+      )}
+
+      {!loading && !error && overview && (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <div className="rounded-xl border border-border bg-background-secondary px-4 py-3">
+            <p className="text-xs text-foreground-muted mb-1">
+              {activeAssetClass === "all" ? "Portfolio Value" : `${activeAssetClass.charAt(0).toUpperCase() + activeAssetClass.slice(1)} Value`}
+            </p>
+            <p className="text-lg font-semibold text-foreground">{formatCurrency(classValue)}</p>
+          </div>
+          <div className="rounded-xl border border-border bg-background-secondary px-4 py-3">
+            <p className="text-xs text-foreground-muted mb-1">Unrealized P/L</p>
+            <p className={`text-lg font-semibold ${classUnrealizedPnl >= 0 ? "text-accent-success" : "text-accent-danger"}`}>
+              {classUnrealizedPnl >= 0 ? "+" : ""}{formatCurrency(classUnrealizedPnl)}
+            </p>
+          </div>
+          <div className="rounded-xl border border-border bg-background-secondary px-4 py-3">
+            <p className="text-xs text-foreground-muted mb-1">
+              Realized P/L{activeAssetClass !== "all" && <span className="ml-1 text-foreground-muted/60">(all)</span>}
+            </p>
+            {classRealizedPnl !== null ? (
+              <p className={`text-lg font-semibold ${classRealizedPnl >= 0 ? "text-accent-success" : "text-accent-danger"}`}>
+                {classRealizedPnl >= 0 ? "+" : ""}{formatCurrency(classRealizedPnl)}
+              </p>
+            ) : (
+              <p className="text-lg font-semibold text-foreground-muted">—</p>
+            )}
+          </div>
+          <div className="rounded-xl border border-border bg-background-secondary px-4 py-3">
+            <p className="text-xs text-foreground-muted mb-1">Total P/L</p>
+            {(() => {
+              const total = classUnrealizedPnl + (classRealizedPnl ?? 0);
+              return (
+                <p className={`text-lg font-semibold ${total >= 0 ? "text-accent-success" : "text-accent-danger"}`}>
+                  {total >= 0 ? "+" : ""}{formatCurrency(total)}
+                </p>
+              );
+            })()}
+          </div>
         </div>
       )}
 
@@ -321,7 +486,7 @@ function PortfolioContent() {
                   transferringAssetId={transferringAssetId}
                   onDelete={handleDeleteAsset}
                   onSell={handleSellAsset}
-                  onTransfer={handleTransferAsset}
+                  onTransfer={activeAssetClass === "all" || activeAssetClass === "crypto" ? handleTransferAsset : undefined}
                 />
               </div>
             </div>
@@ -332,7 +497,7 @@ function PortfolioContent() {
       {!loading && !error && !hasAssets && (
         <div className="text-center py-12">
           <p className="text-foreground-muted">
-            No {activeAssetClass} assets found in your portfolio.
+            No {activeAssetClass === "all" ? "" : activeAssetClass + " "}assets found in your portfolio.
           </p>
           <Link href="/onboarding" className="mt-4 inline-block">
             <Button variant="outline">Connect an Exchange</Button>
@@ -449,13 +614,19 @@ function PortfolioContent() {
               </div>
               <div>
                 <label className="mb-2 block text-sm text-foreground-muted">Destination exchange</label>
-                <input
-                  type="text"
+                <select
                   className={inputClass}
                   value={transferToExchange}
                   onChange={(e) => setTransferToExchange(e.target.value)}
-                  placeholder="e.g. MEXC, Kraken, Coinbase"
-                />
+                  disabled={Boolean(transferringAssetId)}
+                >
+                  <option value="">Select exchange…</option>
+                  {["Binance", "OKX", "Bybit", "KuCoin", "MEXC", "Manual"]
+                    .filter((ex) => ex.toLowerCase() !== assetToTransfer.exchange.toLowerCase())
+                    .map((ex) => (
+                      <option key={ex} value={ex}>{ex}</option>
+                    ))}
+                </select>
               </div>
             </div>
 

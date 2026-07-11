@@ -4,7 +4,11 @@ export function getAuthHeader(request: Request): Record<string, string> {
   const match = cookieHeader.match(/(?:^|;\s*)auth_token=([^;]+)/);
   const token = match ? match[1] : null;
   if (!token || token === "undefined" || token === "null" || !token.trim()) return {};
-  return { Authorization: `Token ${token}` };
+  return { Authorization: `Bearer ${token}` };
+}
+
+export function clearAuthCookie(): string {
+  return "auth_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax";
 }
 
 export const AUTH_COOKIE_OPTIONS = {

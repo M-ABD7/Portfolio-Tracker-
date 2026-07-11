@@ -15,6 +15,7 @@ import {
   User,
   Settings,
   Shield,
+  Link2,
 } from "lucide-react";
 import { getCurrentUser, logoutUser } from "@/lib/api";
 import type { AuthUser } from "@/lib/types";
@@ -37,14 +38,9 @@ export function AppNavbar() {
 
   useEffect(() => {
     getCurrentUser()
-      .then((u) => {
-        setUser(u);
-        if (u?.isStaff && !pathname.startsWith("/admin-panel")) {
-          router.replace("/admin-panel");
-        }
-      })
+      .then((u) => setUser(u))
       .catch(() => setUser(null));
-  }, [pathname, router]);
+  }, [pathname]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -81,26 +77,7 @@ export function AppNavbar() {
           </Link>
 
           <nav className="hidden md:flex items-center gap-1">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                    isActive
-                      ? "text-accent-primary bg-accent-primary/10"
-                      : "text-foreground-muted hover:text-foreground hover:bg-background-secondary"
-                  )}
-                >
-                  <Icon className="w-4 h-4" />
-                  {item.label}
-                </Link>
-              );
-            })}
-            {user?.isStaff && (
+            {user?.isStaff ? (
               <Link
                 href="/admin-panel"
                 className={cn(
@@ -111,12 +88,39 @@ export function AppNavbar() {
                 )}
               >
                 <Shield className="w-4 h-4" />
-                Admin
+                Admin Portal
               </Link>
+            ) : (
+              navItems.map((item) => {
+                const Icon = item.icon;
+                const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                      isActive
+                        ? "text-accent-primary bg-accent-primary/10"
+                        : "text-foreground-muted hover:text-foreground hover:bg-background-secondary"
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {item.label}
+                  </Link>
+                );
+              })
             )}
           </nav>
 
           <div className="flex items-center gap-3">
+            <Link
+              href="/onboarding"
+              className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium border border-accent-primary text-accent-primary hover:bg-accent-primary/10 transition-colors"
+            >
+              <Link2 className="w-4 h-4" />
+              Connect Exchange
+            </Link>
             <div className="relative" ref={menuRef}>
               <button
                 onClick={() => setShowMenu((v) => !v)}
@@ -175,25 +179,40 @@ export function AppNavbar() {
       </div>
 
       <nav className="md:hidden flex items-center gap-1 px-4 pb-3 overflow-x-auto">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = pathname === item.href;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap",
-                isActive
-                  ? "text-accent-primary bg-accent-primary/10"
-                  : "text-foreground-muted hover:text-foreground hover:bg-background-secondary"
-              )}
-            >
-              <Icon className="w-4 h-4" />
-              {item.label}
-            </Link>
-          );
-        })}
+        {user?.isStaff ? (
+          <Link
+            href="/admin-panel"
+            className={cn(
+              "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap",
+              pathname.startsWith("/admin-panel")
+                ? "text-accent-primary bg-accent-primary/10"
+                : "text-foreground-muted hover:text-foreground hover:bg-background-secondary"
+            )}
+          >
+            <Shield className="w-4 h-4" />
+            Admin Portal
+          </Link>
+        ) : (
+          navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = pathname === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap",
+                  isActive
+                    ? "text-accent-primary bg-accent-primary/10"
+                    : "text-foreground-muted hover:text-foreground hover:bg-background-secondary"
+                )}
+              >
+                <Icon className="w-4 h-4" />
+                {item.label}
+              </Link>
+            );
+          })
+        )}
       </nav>
     </header>
   );

@@ -4,9 +4,13 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 
 class UserSerializer(serializers.ModelSerializer):
+    isStaff = serializers.BooleanField(source="is_staff", read_only=True)
+    isActive = serializers.BooleanField(source="is_active", read_only=True)
+    dateJoined = serializers.DateTimeField(source="date_joined", read_only=True)
+
     class Meta:
         model = User
-        fields = ("id", "username", "email", "date_joined")
+        fields = ("id", "username", "email", "dateJoined", "isStaff", "isActive")
 
 
 class RegisterSerializer(serializers.ModelSerializer):

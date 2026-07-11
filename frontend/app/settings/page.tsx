@@ -2,18 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Moon, Sun, Bell, User, Palette, Trash2 } from "lucide-react";
+import { Moon, Sun, User, Palette, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui";
 import { useTheme } from "@/components/ThemeProvider";
 import { deleteAccount, fetchSettings, updateSettings } from "@/lib/api";
-import type { NotificationPreferences, UserSettings } from "@/lib/types";
+import type { UserSettings } from "@/lib/types";
 import { ExchangeConnections } from "@/components/portfolio/ExchangeConnections";
-
-const defaultNotifications: NotificationPreferences = {
-  priceAlerts: true,
-  portfolioUpdates: true,
-  newsletters: false,
-};
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -22,9 +16,6 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
-  const [currency, setCurrency] = useState("USD");
-  const [notifications, setNotifications] =
-    useState<NotificationPreferences>(defaultNotifications);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,8 +31,6 @@ export default function SettingsPage() {
         setSettings(s);
         setDisplayName(s.displayName);
         setEmail(s.email);
-        setCurrency(s.currency);
-        setNotifications(s.notifications ?? defaultNotifications);
         if (s.theme === "light" || s.theme === "dark") {
           setTheme(s.theme);
         }
@@ -60,9 +49,7 @@ export default function SettingsPage() {
       const { settings: updated } = await updateSettings({
         displayName,
         email,
-        currency,
         theme,
-        notifications,
       });
       setSettings(updated);
       setSaveMessage("Settings saved successfully.");
@@ -184,25 +171,12 @@ export default function SettingsPage() {
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground focus:outline-none focus:border-accent-primary"
+                readOnly
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground-muted cursor-not-allowed opacity-70"
               />
-            </div>
-            <div>
-              <label className="block text-sm text-foreground-muted mb-1">
-                Preferred currency
-              </label>
-              <select
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-foreground focus:outline-none focus:border-accent-primary"
-              >
-                {["USD", "EUR", "GBP", "JPY", "AUD", "CAD"].map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
+              <p className="text-xs text-foreground-muted mt-1">
+                Email cannot be changed after account creation.
+              </p>
             </div>
             <button
               type="submit"
@@ -212,54 +186,6 @@ export default function SettingsPage() {
               {saving ? "Saving…" : "Save profile"}
             </button>
           </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent>
-          <div className="flex items-center gap-2 mb-4">
-            <Bell className="w-5 h-5 text-accent-primary" />
-            <h2 className="text-lg font-semibold text-foreground">Notifications</h2>
-          </div>
-          <div className="space-y-3">
-            {(
-              [
-                ["priceAlerts", "Price alerts", "Get notified on significant price moves."],
-                [
-                  "portfolioUpdates",
-                  "Portfolio updates",
-                  "Summary updates when your holdings change.",
-                ],
-                ["newsletters", "Product newsletter", "Occasional product news and tips."],
-              ] as const
-            ).map(([key, label, desc]) => (
-              <label
-                key={key}
-                className="flex items-start gap-3 p-3 rounded-xl border border-border hover:border-accent-primary/30 cursor-pointer transition-colors"
-              >
-                <input
-                  type="checkbox"
-                  checked={notifications[key]}
-                  onChange={(e) =>
-                    setNotifications((n) => ({ ...n, [key]: e.target.checked }))
-                  }
-                  className="mt-1 rounded border-border text-accent-primary"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-foreground">{label}</span>
-                  <span className="block text-xs text-foreground-muted mt-0.5">{desc}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => persistSettings()}
-            disabled={saving}
-            className="mt-4 px-4 py-2 border border-border rounded-lg text-sm font-medium text-foreground-muted hover:text-foreground hover:border-accent-primary/40 disabled:opacity-50"
-          >
-            Save notification preferences
-          </button>
         </CardContent>
       </Card>
 

@@ -28,6 +28,9 @@ export function AssetTable({ assets, deletingAssetId, sellingAssetId, transferri
               Quantity
             </th>
             <th className="text-right py-3 px-2 text-xs font-medium text-foreground-muted uppercase tracking-wider">
+              Avg Buy Price
+            </th>
+            <th className="text-right py-3 px-2 text-xs font-medium text-foreground-muted uppercase tracking-wider">
               Current Price
             </th>
             <th className="text-right py-3 px-2 text-xs font-medium text-foreground-muted uppercase tracking-wider">
@@ -70,6 +73,9 @@ export function AssetTable({ assets, deletingAssetId, sellingAssetId, transferri
               </td>
               <td className="py-4 px-2 text-right text-foreground">{formatQuantity(asset.quantity)}</td>
               <td className="py-4 px-2 text-right text-foreground">
+                {formatCurrency(asset.avgBuyPrice)}
+              </td>
+              <td className="py-4 px-2 text-right text-foreground">
                 {formatCurrency(asset.currentPrice)}
               </td>
               <td className="py-4 px-2 text-right text-foreground">
@@ -93,8 +99,12 @@ export function AssetTable({ assets, deletingAssetId, sellingAssetId, transferri
                     variant="outline"
                     size="sm"
                     onClick={() => onTransfer(asset)}
-                    disabled={transferringAssetId === asset.id}
-                    className="text-accent-primary hover:text-accent-primary"
+                    disabled={asset.isSynced || transferringAssetId === asset.id}
+                    title={asset.isSynced ? "Synced from exchange — manage via exchange sync" : undefined}
+                    className={cn(
+                      "text-accent-primary hover:text-accent-primary",
+                      asset.isSynced && "opacity-40 cursor-not-allowed hover:bg-transparent"
+                    )}
                   >
                     <ArrowLeftRight className="w-3 h-3" />
                     {transferringAssetId === asset.id ? "Transferring..." : "Transfer"}
@@ -108,8 +118,12 @@ export function AssetTable({ assets, deletingAssetId, sellingAssetId, transferri
                     variant="outline"
                     size="sm"
                     onClick={() => onSell(asset)}
-                    disabled={sellingAssetId === asset.id}
-                    className="text-accent-warning hover:text-accent-warning"
+                    disabled={asset.isSynced || sellingAssetId === asset.id}
+                    title={asset.isSynced ? "Synced from exchange — manage via exchange sync" : undefined}
+                    className={cn(
+                      "text-accent-warning hover:text-accent-warning",
+                      asset.isSynced && "opacity-40 cursor-not-allowed hover:bg-transparent"
+                    )}
                   >
                     {sellingAssetId === asset.id ? "Selling..." : "Sell"}
                   </Button>
@@ -122,8 +136,12 @@ export function AssetTable({ assets, deletingAssetId, sellingAssetId, transferri
                     variant="ghost"
                     size="sm"
                     onClick={() => onDelete(asset)}
-                    disabled={deletingAssetId === asset.id}
-                    className="text-accent-danger hover:text-accent-danger"
+                    disabled={asset.isSynced || deletingAssetId === asset.id}
+                    title={asset.isSynced ? "Synced from exchange — manage via exchange sync" : undefined}
+                    className={cn(
+                      "text-accent-danger hover:text-accent-danger",
+                      asset.isSynced && "opacity-40 cursor-not-allowed hover:bg-transparent"
+                    )}
                   >
                     <Trash2 className="w-4 h-4" />
                     {deletingAssetId === asset.id ? "Deleting..." : "Delete"}

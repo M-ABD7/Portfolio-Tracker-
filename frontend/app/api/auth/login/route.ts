@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     }
 
     const res = NextResponse.json({ user: payload.user }, { status: 200 });
-    res.cookies.set("auth_token", payload.token, AUTH_COOKIE_OPTIONS);
+    res.cookies.set("auth_token", payload.access, AUTH_COOKIE_OPTIONS);
     return res;
   } catch {
     return NextResponse.json(

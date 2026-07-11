@@ -24,7 +24,7 @@ def sync_exchange_holdings(connection) -> dict:
         connection: ExchangeConnection model instance (legacy portfolio app or new app)
 
     Returns:
-        {"synced": int, "added": int, "updated": int}
+        {"synced": int, "added": int, "updated": int, "removed": int}
 
     Raises:
         ExchangeError: if the exchange API call fails
@@ -44,6 +44,7 @@ def sync_exchange_holdings(connection) -> dict:
     exchange_label = connection.get_exchange_display()
 
     added = updated = synced = 0
+    touched_asset_ids = set()
 
     for bal in balances:
         symbol = bal.symbol.upper()
@@ -61,6 +62,7 @@ def sync_exchange_holdings(connection) -> dict:
                 "metadata": {},
             },
         )
+        touched_asset_ids.add(asset.id)
 
         # Try to compute weighted avg cost basis from recent trades
         cost_basis = None
@@ -92,7 +94,8 @@ def sync_exchange_holdings(connection) -> dict:
             holding.quantity = bal.total
             if cost_basis is not None and holding.cost_basis is None:
                 holding.cost_basis = cost_basis
-            holding.save(update_fields=["quantity", "cost_basis"])
+            holding.metadata = {**holding.metadata, "exchange": exchange_label, "source": "sync"}
+            holding.save(update_fields=["quantity", "cost_basis", "metadata"])
             updated += 1
         else:
             Holding.objects.create(
@@ -100,20 +103,38 @@ def sync_exchange_holdings(connection) -> dict:
                 asset=asset,
                 quantity=bal.total,
                 cost_basis=cost_basis,
-                metadata={"exchange": exchange_label},
+                metadata={"exchange": exchange_label, "source": "sync"},
             )
             added += 1
         synced += 1
+
+    # Remove holdings for this connection's exchange that are no longer present
+    # in the fetched balances (fully sold, or fallen below the dust threshold).
+    stale_qs = Holding.objects.filter(
+        portfolio=portfolio,
+        metadata__exchange=exchange_label,
+    ).exclude(asset_id__in=touched_asset_ids)
+    removed = stale_qs.count()
+    if removed:
+        logger.info(
+            "Reconciling %d stale holding(s) for %s/%s: %s",
+            removed,
+            connection.user.username,
+            connection.exchange,
+            list(stale_qs.values_list("asset__symbol", flat=True)),
+        )
+        stale_qs.delete()
 
     connection.last_synced_at = timezone.now()
     connection.save(update_fields=["last_synced_at"])
 
     logger.info(
-        "Sync complete for %s/%s: synced=%d added=%d updated=%d",
+        "Sync complete for %s/%s: synced=%d added=%d updated=%d removed=%d",
         connection.user.username,
         connection.exchange,
         synced,
         added,
         updated,
+        removed,
     )
-    return {"synced": synced, "added": added, "updated": updated}
+    return {"synced": synced, "added": added, "updated": updated, "removed": removed}

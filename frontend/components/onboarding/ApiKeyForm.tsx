@@ -8,6 +8,7 @@ import type { ConnectExchangeResponse } from "@/lib/types";
 const EXCHANGE_LABELS: Record<string, string> = {
   binance: "Binance",
   okx: "OKX",
+  mexc: "MEXC",
 };
 
 const READ_ONLY_GUIDES: Record<string, string> = {
@@ -17,6 +18,9 @@ const READ_ONLY_GUIDES: Record<string, string> = {
   okx:
     'In OKX → API → Create V5 API Key, set permissions to "Read" only. ' +
     "Do NOT enable Trade or Withdraw permissions.",
+  mexc:
+    'In MEXC → Account → API Management, create a key with "Read Only" permissions checked. ' +
+    "Do NOT enable trading or withdrawal permissions.",
 };
 
 interface ApiKeyFormProps {
@@ -51,7 +55,18 @@ export function ApiKeyForm({ exchange, onSuccess, onCancel }: ApiKeyFormProps) {
       });
       onSuccess(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to connect. Check your API key and try again.");
+      const msg = err instanceof Error ? err.message : "";
+      if (/401|unauthorized|invalid.*key|invalid.*secret/i.test(msg)) {
+        setError("Invalid API key or secret. Please double-check your credentials.");
+      } else if (/403|forbidden|permission/i.test(msg)) {
+        setError("Access denied. Ensure your API key has read-only permissions enabled.");
+      } else if (/network|fetch|ECONNREFUSED/i.test(msg)) {
+        setError("Unable to reach the exchange. Check your internet connection and try again.");
+      } else if (msg) {
+        setError(msg);
+      } else {
+        setError("Could not connect. Please verify your API key, secret, and passphrase.");
+      }
     } finally {
       setLoading(false);
     }
